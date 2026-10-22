@@ -39,13 +39,13 @@ def parse():
         line = line.strip()
         if not line or line.startswith('#'):
             continue
-        cols = line.split('|') + [''] * 9
-        pref, name, suffix, yomi, traps, level, city, wiki, alt = [c.strip() for c in cols[:9]]
+        cols = line.split('|') + [''] * 10
+        pref, name, suffix, yomi, traps, level, city, wiki, alt, area = [c.strip() for c in cols[:10]]
         if pref not in PREFS:
             sys.exit(f'{n}行目: 都道府県名が不正です: {pref}')
         rows.append({
             'line': n, 'pref': pref, 'name': name, 'suffix': suffix, 'yomi': yomi,
-            'traps': [t for t in traps.split('、') if t], 'alt': [a for a in alt.split('、') if a],
+            'traps': [t for t in traps.split('、') if t], 'alt': [a for a in alt.split('、') if a], 'area': area,
             'level': int(level or 2), 'city': city,
             'wiki': wiki or (name + suffix if suffix else name + '駅'),
         })
@@ -142,6 +142,15 @@ def main():
     dup = {k for k in keys if keys.count(k) > 1}
     if dup:
         sys.exit(f'同じ都道府県に同じ地名が重複しています: {dup}')
+    # 同じ都道府県に「読み＋種別の読み」まで同じ地名があると、読みから漢字を答える問題で区別がつかない。
+    # その場合は地域の列（例: 道北・宗谷地方）を必ず埋める
+    same = {}
+    for r in rows:
+        same.setdefault((r['pref'], r['yomi'], r['suffix']), []).append(r)
+    clash = [g for g in same.values() if len(g) > 1 and (any(not r['area'] for r in g) or len({r['area'] for r in g}) < len(g))]
+    if clash:
+        sys.exit('同じ都道府県に同じ読みの地名があります。地域の列で見分けられるようにしてください: ' +
+                 ' / '.join('・'.join(f"{r['name']}{r['suffix']}（{r['line']}行目）" for r in g) for g in clash))
     cache = fetch([r['wiki'] for r in rows])
     out, ng = [], []
     for r in rows:
@@ -157,6 +166,8 @@ def main():
         }
         if r['alt']:
             item['alt'] = r['alt']
+        if r['area']:
+            item['area'] = r['area']
         if r['city']:
             item['city'] = r['city']
         if info.get('lat') is not None:

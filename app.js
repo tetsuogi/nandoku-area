@@ -42,7 +42,9 @@ const inKind = (p, k) => !k || k === 'all' || (k === 'muni' ? !!p.suffix : !p.su
 
 const fullName = p => p.name + p.suffix;
 const fullYomi = p => p.yomi + p.sr;
-const where = p => `${fullPref(p.pref)}${p.city || ''}`;
+const where = p => `${fullPref(p.pref)}${p.city || ''}${p.area ? `（${p.area}）` : ''}`;
+// 読みから漢字を答える問題・カード用の場所の表示（同じ読みの地名を見分けるための地域も添える）
+const whereHint = p => fullPref(p.pref) + (p.city ? `・${p.city}` : '') + (p.area ? `・${p.area}` : '');
 const kindLabel = p => (p.suffix ? p.suffix : '町名・地名');
 const stars = lv => '★'.repeat(lv) + '☆'.repeat(3 - lv);
 
@@ -518,7 +520,7 @@ function drawCard() {
     if (!cardUI.flipped) {
       face = side === 'kanji'
         ? `<div><div class="small">${esc(fullPref(p.pref))}</div><div class="big">${nameHtml(p)}</div><div class="hint">タップでめくる（スペースキー）</div></div>`
-        : `<div><div class="small">${esc(fullPref(p.pref))}</div><div class="big kana">${esc(p.yomi)}<small>${esc(p.sr)}</small></div><div class="hint">どんな字？ タップでめくる</div></div>`;
+        : `<div><div class="small">${esc(whereHint(p))}</div><div class="big kana">${esc(p.yomi)}<small>${esc(p.sr)}</small></div><div class="hint">どんな字？ タップでめくる</div></div>`;
     } else {
       face = `<div style="width:100%">
         <div class="small">${esc(where(p))}</div>
@@ -592,14 +594,14 @@ function makeQuestion(key) {
   }
   if (type === 'kanji') {
     return Object.assign(q, {
-      prompt: '「' + p.yomi + p.sr + '」はどれ？', show: `<span class="kana">${esc(p.yomi)}<small>${esc(p.sr)}</small></span>`, sub: fullPref(p.pref) + (p.city ? `・${p.city}` : ''),
+      prompt: '「' + p.yomi + p.sr + '」はどれ？', show: `<span class="kana">${esc(p.yomi)}<small>${esc(p.sr)}</small></span>`, sub: whereHint(p),
       answer: fullName(p), choices: [fullName(p), ...kanjiDistractors(p)], choiceOnly: true, kanjiChoices: true,
     });
   }
   if (type === 'write') {
     return Object.assign(q, {
       prompt: '漢字で書いてみよう', show: `<span class="kana">${esc(p.yomi)}<small>${esc(p.sr)}</small></span>`,
-      sub: fullPref(p.pref) + (p.city ? `・${p.city}` : '') + (p.suffix ? `（「${p.suffix}」は書かなくてOK）` : ''),
+      sub: whereHint(p) + (p.suffix ? `（「${p.suffix}」は書かなくてOK）` : ''),
       answer: fullName(p), choices: [], selfJudge: true,
     });
   }
