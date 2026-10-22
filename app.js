@@ -982,6 +982,12 @@ function setupPad(canvas) {
   const end = () => { cur = null; };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
+  // iPhone の Safari は、書いている途中でも長押しで文字選択メニューを出したり、画面をスクロールしたりするので、
+  // 書き欄の上の指の動きはブラウザに渡さない（線は pointer イベントで描くので影響しない）
+  const block = e => { if (e.cancelable) e.preventDefault(); };
+  for (const t of ['touchstart', 'touchmove', 'touchend']) canvas.addEventListener(t, block, { passive: false });
+  canvas.addEventListener('contextmenu', block);
+  canvas.addEventListener('selectstart', block);
   pad.undo = () => { pad.strokes.pop(); redraw(); };
   pad.clear = () => { pad.strokes = []; redraw(); };
   size();

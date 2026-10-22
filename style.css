@@ -50,6 +50,8 @@ body {
 }
 
 button, input, select { font: inherit; color: inherit; }
+/* ボタンを続けて押したときに画面が拡大されないように */
+button, a, .chip, .tile { touch-action: manipulation; }
 a { color: var(--ai); }
 
 /* ---------- header ---------- */
@@ -530,6 +532,11 @@ ruby.sfx rt { font-size: .5em; }
   color: var(--accent); opacity: .3;
 }
 #w-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+/* 書き取りの画面では文字選択・長押しメニューを出さない（書いている指が問題文に触れても選択が始まらないように） */
+#q-shell[data-mode="write"], #q-shell[data-mode="write"] * {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.w-pad { overscroll-behavior: contain; }
 .w-actions { justify-content: flex-end; margin-top: 12px; }
 .w-actions .verdict-bar { flex: 1 1 100%; margin-top: 0; }
 .w-answer { flex: 1 1 100%; font-weight: 700; color: var(--muted); }
