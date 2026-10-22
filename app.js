@@ -545,6 +545,7 @@ const TYPES = {
   yomi: '漢字 → 読み',
   kanji: '読み → 漢字',
   pref: '地名 → 都道府県',
+  write: '書き取り（読み → 漢字）',
 };
 
 // 読み → 漢字 の誤答：同じ都道府県 → 同じ地方 → 全国 の順に、字数の近い地名から選ぶ
@@ -593,6 +594,13 @@ function makeQuestion(key) {
     return Object.assign(q, {
       prompt: '「' + p.yomi + p.sr + '」はどれ？', show: `<span class="kana">${esc(p.yomi)}<small>${esc(p.sr)}</small></span>`, sub: fullPref(p.pref) + (p.city ? `・${p.city}` : ''),
       answer: fullName(p), choices: [fullName(p), ...kanjiDistractors(p)], choiceOnly: true, kanjiChoices: true,
+    });
+  }
+  if (type === 'write') {
+    return Object.assign(q, {
+      prompt: '漢字で書いてみよう', show: `<span class="kana">${esc(p.yomi)}<small>${esc(p.sr)}</small></span>`,
+      sub: fullPref(p.pref) + (p.city ? `・${p.city}` : '') + (p.suffix ? `（「${p.suffix}」は書かなくてOK）` : ''),
+      answer: fullName(p), choices: [], selfJudge: true,
     });
   }
   if (type === 'pref') {
@@ -699,8 +707,8 @@ function renderQuizSettings() {
     inputChip.disabled = !canInput;
     form.querySelectorAll('[data-group="mode"] [data-v]').forEach(x => x.setAttribute('aria-pressed', x.dataset.v === settings.mode));
     document.getElementById('mode-note').textContent = canInput
-      ? (settings.types.length > 1 ? '入力で答えるのは「漢字 → 読み」だけです（ほかは4択で出ます）。' : '')
-      : '入力で答えられるのは「漢字 → 読み」だけです。';
+      ? (settings.types.length > 1 ? '入力で答えるのは「漢字 → 読み」だけです（書き取りは手書き、ほかは4択で出ます）。' : '')
+      : '入力で答えられるのは「漢字 → 読み」だけです。' + (settings.types.includes('write') ? '書き取りは手書きで答えます。' : '');
     const n = poolFromSettings().length;
     document.getElementById('pool-meta').textContent = `この条件の地名：${n}件`;
     document.getElementById('qs-start').disabled = settings.types.length === 0 || n === 0;
@@ -737,7 +745,7 @@ const nextLabel = () => (session.i + 1 < session.qs.length ? '次へ →' : '結
 // 問題文の部分（4択・入力で共用）。長い地名は1行に収まるよう字を小さくする
 function questionTopHtml(q) {
   const s = session;
-  const len = q.type === 'kanji' ? 0 : q.p.name.length + (q.p.suffix ? 0.62 : 0);
+  const len = q.type === 'kanji' || q.type === 'write' ? 0 : q.p.name.length + (q.p.suffix ? 0.62 : 0);
   return `<div class="q-head"><span>${esc(s.title)}</span><span>${s.i + 1} / ${s.qs.length}</span></div>
     <div class="q-progress"><i style="width:${(s.i / s.qs.length) * 100}%"></i></div>
     <span class="q-label">${esc(q.label)}</span>
@@ -756,7 +764,8 @@ const feedbackHtml = q => `<div class="feedback">
 
 function renderQuestion() {
   const q = session.qs[session.i];
-  if (session.mode === 'choice' || q.choiceOnly) renderChoiceQuestion(q);
+  if (q.selfJudge) renderWriteQuestion(q);
+  else if (session.mode === 'choice' || q.choiceOnly) renderChoiceQuestion(q);
   else renderInputQuestion(q);
 }
 
@@ -857,6 +866,128 @@ function renderInputQuestion(q) {
   document.getElementById('q-fb').innerHTML = ans ? feedbackHtml(q) : '';
 }
 
+// 書き取り：指で書いて「答えを見る」→ 正解を自分の字に薄く重ねて表示 →「書けた」「書けなかった」を自分で選ぶ。
+// 答えを見たり判定したりしても、書いた字は消さない（キャンバスは問題が変わるまで作り直さない）
+function renderWriteQuestion(q) {
+  const ans = session.answered;
+  if (document.getElementById('q-shell')?.dataset.key !== q.key) {
+    const chars = [...q.p.name];
+    // 1マスを大きく取れるよう、4文字は2×2、スマホでは3文字も2列（2＋1）にする
+    const cols = chars.length === 4 || (chars.length === 3 && window.innerWidth < 600) ? 2 : chars.length;
+    app.innerHTML = `
+      <div class="panel" id="q-shell" data-mode="write" data-key="${esc(q.key)}">
+        ${questionTopHtml(q)}
+        <div class="w-pad" style="--cols:${cols}; --rows:${Math.ceil(chars.length / cols)}">
+          <div class="w-guide">${chars.map(c => `<span data-c="${esc(c)}"></span>`).join('')}</div>
+          <canvas id="w-canvas" aria-label="ここに指で書く"></canvas>
+        </div>
+        <div class="row w-actions" id="w-actions"></div>
+        <div id="q-fb"></div>
+      </div>
+      <div class="row" style="margin-top:12px; justify-content:flex-end">
+        <button class="btn ghost small" id="quit">やめる</button>
+      </div>`;
+    setupPad(document.getElementById('w-canvas'));
+    document.getElementById('quit').addEventListener('click', quitQuiz);
+    document.getElementById('w-actions').addEventListener('click', e => {
+      const b = e.target.closest('[data-w]');
+      if (!b) return;
+      const act = b.dataset.w;
+      if (act === 'undo') pad.undo();
+      if (act === 'clear') pad.clear();
+      if (act === 'reveal') { session.revealed = true; renderWriteQuestion(q); }
+      if (act === 'ok' || act === 'ng') record(act === 'ok');
+      if (act === 'next') nextQuestion();
+    });
+  }
+
+  const revealed = session.revealed || !!ans;
+  document.querySelector('.w-guide').classList.toggle('show', revealed);
+  document.querySelectorAll('.w-guide span').forEach(sp => { sp.textContent = revealed ? sp.dataset.c : ''; });
+  pad.locked = !!ans;
+  const actions = document.getElementById('w-actions');
+  if (!revealed) {
+    actions.innerHTML = `
+      <button class="btn small" data-w="undo">1画もどす</button>
+      <button class="btn small ghost" data-w="clear">消す</button>
+      <button class="btn primary" data-w="reveal">答えを見る</button>`;
+  } else if (!ans) {
+    actions.innerHTML = `
+      <div class="w-answer">正解：<span class="pn">${esc(q.p.name)}</span><span class="sfx">${esc(q.p.suffix)}</span></div>
+      <button class="btn w-ng" data-w="ng">書けなかった</button>
+      <button class="btn primary w-ok" data-w="ok">書けた！</button>`;
+  } else {
+    actions.innerHTML = `
+      <div class="verdict-bar ${ans.ok ? 'ok' : 'ng'}">
+        <div><p class="verdict">${ans.ok ? '書けた！' : 'つぎは書ける！'}</p>${ans.ok ? '' : '<p class="your">復習リストに入れました</p>'}</div>
+        <div class="verdict-actions">
+          ${ans.ok ? knownBtn(q.p.id, 'もう覚えた') : ''}
+          <button class="btn primary" data-w="next" id="next">${nextLabel()}</button>
+        </div>
+      </div>`;
+    document.getElementById('next').focus({ preventScroll: true });
+  }
+  document.getElementById('q-fb').innerHTML = ans ? feedbackHtml(q) : '';
+}
+
+// 手書きの欄。書いた線を覚えておき、1画もどす・画面の大きさが変わったときに描き直す
+const pad = { strokes: [], locked: false, undo() {}, clear() {} };
+function setupPad(canvas) {
+  const ctx = canvas.getContext('2d');
+  pad.strokes = [];
+  pad.locked = false;
+  let cur = null;
+  const size = () => {
+    const r = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(r.width * dpr);
+    canvas.height = Math.round(r.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    redraw();
+  };
+  const lineWidth = () => Math.max(4, Math.min(10, canvas.getBoundingClientRect().height / 26));
+  const drawStroke = st => {
+    ctx.lineWidth = lineWidth();
+    ctx.beginPath();
+    st.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    if (st.length === 1) ctx.lineTo(st[0][0] + 0.1, st[0][1]);
+    ctx.stroke();
+  };
+  function redraw() {
+    const r = canvas.getBoundingClientRect();
+    ctx.clearRect(0, 0, r.width, r.height);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#2e2a3b';
+    pad.strokes.forEach(drawStroke);
+  }
+  const pos = e => {
+    const r = canvas.getBoundingClientRect();
+    return [e.clientX - r.left, e.clientY - r.top];
+  };
+  canvas.addEventListener('pointerdown', e => {
+    if (pad.locked) return;
+    e.preventDefault();
+    canvas.setPointerCapture(e.pointerId);
+    cur = [pos(e)];
+    pad.strokes.push(cur);
+    redraw();
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!cur) return;
+    e.preventDefault();
+    cur.push(pos(e));
+    redraw();
+  });
+  const end = () => { cur = null; };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+  pad.undo = () => { pad.strokes.pop(); redraw(); };
+  pad.clear = () => { pad.strokes = []; redraw(); };
+  size();
+  new ResizeObserver(size).observe(canvas);
+}
+
 function quitQuiz() {
   session = null;
   document.body.classList.remove('typing');
@@ -864,10 +995,15 @@ function quitQuiz() {
 }
 
 function answer(input) {
+  const q = session.qs[session.i];
+  record(session.mode === 'choice' || q.choiceOnly ? input === q.answer : q.check(input), input);
+}
+
+// 結果を記録する（書き取りは「書けた」「書けなかった」の自己判定でここを呼ぶ）
+function record(ok, input = '') {
   const s = session;
   if (s.answered) return;
   const q = s.qs[s.i];
-  const ok = s.mode === 'choice' || q.choiceOnly ? input === q.answer : q.check(input);
   s.answered = { input, ok };
   s.results.push({ key: q.key, ok });
   state.total++;
@@ -890,6 +1026,7 @@ function nextQuestion() {
   const wasInput = document.getElementById('q-shell')?.dataset.mode === 'input';
   session.i++;
   session.answered = null;
+  session.revealed = false;
   renderQuiz();
   // 入力モードで次も入力の問題なら、画面を動かさない
   if (!(wasInput && document.getElementById('q-shell')?.dataset.mode === 'input')) {
@@ -898,7 +1035,7 @@ function nextQuestion() {
   }
 }
 
-const qText = q => (q.type === 'kanji' ? `${fullYomi(q.p)}（${q.p.pref}）` : fullName(q.p));
+const qText = q => (q.type === 'kanji' || q.type === 'write' ? `${fullYomi(q.p)}（${q.p.pref}）` : fullName(q.p));
 const aText = q => (q.type === 'yomi' ? fullYomi(q.p) : q.answer);
 
 function renderQuizResult() {

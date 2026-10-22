@@ -509,6 +509,36 @@ ruby.sfx rt { font-size: .5em; }
 .miss-list .m-yomi { color: var(--accent); font-size: 13px; }
 .miss-list .m-n { color: var(--accent); font-size: 13px; font-weight: 900; white-space: nowrap; }
 
+/* ---------- 書き取り ---------- */
+.w-pad {
+  --cols: 2; --rows: 1;
+  position: relative; margin: 0 auto;
+  /* マスは正方形。画面の幅と高さの両方に収まる大きさにする */
+  --box: min(calc((100vw - 76px) / var(--cols)), calc(46vh / var(--rows)), 200px);
+  width: calc(var(--box) * var(--cols)); height: calc(var(--box) * var(--rows));
+  border: 2px solid var(--accent); border-radius: 12px; background: #fff; overflow: hidden;
+}
+@media (min-width: 720px) { .w-pad { --box: min(calc(560px / var(--cols)), calc(46vh / var(--rows)), 200px); } }
+.w-guide { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(var(--cols), 1fr); grid-template-rows: repeat(var(--rows), 1fr); }
+/* 習字の紙のような十字の補助線 */
+.w-guide span {
+  display: grid; place-items: center; border: 1.5px solid color-mix(in srgb, var(--accent) 45%, transparent); margin: -1.5px 0 0 -1.5px;
+  background:
+    repeating-linear-gradient(to bottom, var(--accent-soft) 0 4px, transparent 4px 8px) center / 1px 100% no-repeat,
+    repeating-linear-gradient(to right, var(--accent-soft) 0 4px, transparent 4px 8px) center / 100% 1px no-repeat;
+  font-family: var(--mincho); font-weight: 900; font-size: calc(var(--box) * .82); line-height: 1;
+  color: var(--accent); opacity: .3;
+}
+#w-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+.w-actions { justify-content: flex-end; margin-top: 12px; }
+.w-actions .verdict-bar { flex: 1 1 100%; margin-top: 0; }
+.w-answer { flex: 1 1 100%; font-weight: 700; color: var(--muted); }
+.w-actions .w-ok, .w-actions .w-ng { flex: 1 1 0; }
+.w-answer .pn { font-size: 30px; color: var(--ink); }
+.btn.w-ng { border-color: #eaa3ab; color: var(--ng); }
+.btn.w-ok { background: var(--ok); border-color: var(--ok); box-shadow: 0 5px 0 #2b561c; }
+.btn.w-ok:active { box-shadow: 0 2px 0 #2b561c; }
+
 /* ---------- dialog ---------- */
 dialog {
   width: min(520px, calc(100vw - 32px));
