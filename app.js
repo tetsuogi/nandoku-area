@@ -866,7 +866,8 @@ function renderInputQuestion(q) {
   document.getElementById('q-fb').innerHTML = ans ? feedbackHtml(q) : '';
 }
 
-// 書き取り：指で書いて「答えを見る」→ 正解を自分の字に薄く重ねて表示 →「書けた」「書けなかった」を自分で選ぶ。
+// 書き取り：指で書いて「答えを見る」→ 書き欄の下に手本を表示 →「書けた」「書けなかった」を自分で選ぶ。
+// 手本は「重ねて比べる」で書き欄に薄く重ねることもできる（オン・オフは次の問題以降も覚えておく）。
 // 答えを見たり判定したりしても、書いた字は消さない（キャンバスは問題が変わるまで作り直さない）
 function renderWriteQuestion(q) {
   const ans = session.answered;
@@ -881,6 +882,12 @@ function renderWriteQuestion(q) {
           <div class="w-guide">${chars.map(c => `<span data-c="${esc(c)}"></span>`).join('')}</div>
           <canvas id="w-canvas" aria-label="ここに指で書く"></canvas>
         </div>
+        <div class="w-model" id="w-model" hidden>
+          <span class="w-model-label">手本</span>
+          <div class="w-model-grid" style="--cols:${chars.length}">${chars.map(c => `<span>${esc(c)}</span>`).join('')}</div>
+          ${q.p.suffix ? `<span class="sfx">${esc(q.p.suffix)}</span>` : ''}
+          <button class="btn small w-overlay" data-w="overlay">重ねて比べる</button>
+        </div>
         <div class="row w-actions" id="w-actions"></div>
         <div id="q-fb"></div>
       </div>
@@ -889,21 +896,29 @@ function renderWriteQuestion(q) {
       </div>`;
     setupPad(document.getElementById('w-canvas'));
     document.getElementById('quit').addEventListener('click', quitQuiz);
-    document.getElementById('w-actions').addEventListener('click', e => {
+    document.getElementById('q-shell').addEventListener('click', e => {
       const b = e.target.closest('[data-w]');
       if (!b) return;
       const act = b.dataset.w;
       if (act === 'undo') pad.undo();
       if (act === 'clear') pad.clear();
       if (act === 'reveal') { session.revealed = true; renderWriteQuestion(q); }
+      if (act === 'overlay') {
+        settings.writeOverlay = !settings.writeOverlay;
+        state.settings = settings;
+        save();
+        renderWriteQuestion(q);
+      }
       if (act === 'ok' || act === 'ng') record(act === 'ok');
       if (act === 'next') nextQuestion();
     });
   }
 
   const revealed = session.revealed || !!ans;
-  document.querySelector('.w-guide').classList.toggle('show', revealed);
-  document.querySelectorAll('.w-guide span').forEach(sp => { sp.textContent = revealed ? sp.dataset.c : ''; });
+  const overlay = revealed && !!settings.writeOverlay;
+  document.querySelectorAll('.w-guide span').forEach(sp => { sp.textContent = overlay ? sp.dataset.c : ''; });
+  document.getElementById('w-model').hidden = !revealed;
+  document.querySelector('.w-overlay').setAttribute('aria-pressed', overlay);
   pad.locked = !!ans;
   const actions = document.getElementById('w-actions');
   if (!revealed) {
@@ -913,7 +928,6 @@ function renderWriteQuestion(q) {
       <button class="btn primary" data-w="reveal">答えを見る</button>`;
   } else if (!ans) {
     actions.innerHTML = `
-      <div class="w-answer">正解：<span class="pn">${esc(q.p.name)}</span><span class="sfx">${esc(q.p.suffix)}</span></div>
       <button class="btn w-ng" data-w="ng">書けなかった</button>
       <button class="btn primary w-ok" data-w="ok">書けた！</button>`;
   } else {

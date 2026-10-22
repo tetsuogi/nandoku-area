@@ -529,8 +529,24 @@ ruby.sfx rt { font-size: .5em; }
     repeating-linear-gradient(to bottom, var(--accent-soft) 0 4px, transparent 4px 8px) center / 1px 100% no-repeat,
     repeating-linear-gradient(to right, var(--accent-soft) 0 4px, transparent 4px 8px) center / 100% 1px no-repeat;
   font-family: var(--mincho); font-weight: 900; font-size: calc(var(--box) * .82); line-height: 1;
-  color: var(--accent); opacity: .3;
+  color: color-mix(in srgb, var(--accent) 22%, #fff);
 }
+/* 手本：書き欄の下に、同じマスの並びで小さく出す */
+.w-model {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 12px;
+  padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-2); border: 2px solid var(--line);
+}
+.w-model[hidden] { display: none; }
+.w-model-label { font-size: 12px; font-weight: 700; color: var(--muted); }
+.w-model-grid { display: grid; grid-template-columns: repeat(var(--cols), 56px); }
+.w-model-grid span {
+  display: grid; place-items: center; width: 56px; height: 56px; margin: -1px 0 0 -1px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); background: #fff;
+  font-family: var(--mincho); font-weight: 900; font-size: 46px; line-height: 1; color: var(--ink);
+}
+.w-model .sfx { font-size: 24px; align-self: flex-end; }
+.w-overlay { margin-left: auto; }
+.w-overlay[aria-pressed="true"] { background: var(--ai); border-color: var(--ai); color: #fff; }
 #w-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
 /* 書き取りの画面では文字選択・長押しメニューを出さない（書いている指が問題文に触れても選択が始まらないように） */
 #q-shell[data-mode="write"], #q-shell[data-mode="write"] * {
@@ -539,9 +555,7 @@ ruby.sfx rt { font-size: .5em; }
 .w-pad { overscroll-behavior: contain; }
 .w-actions { justify-content: flex-end; margin-top: 12px; }
 .w-actions .verdict-bar { flex: 1 1 100%; margin-top: 0; }
-.w-answer { flex: 1 1 100%; font-weight: 700; color: var(--muted); }
 .w-actions .w-ok, .w-actions .w-ng { flex: 1 1 0; }
-.w-answer .pn { font-size: 30px; color: var(--ink); }
 .btn.w-ng { border-color: #eaa3ab; color: var(--ng); }
 .btn.w-ok { background: var(--ok); border-color: var(--ok); box-shadow: 0 5px 0 #2b561c; }
 .btn.w-ok:active { box-shadow: 0 2px 0 #2b561c; }
