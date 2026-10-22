@@ -120,8 +120,8 @@ function prefStats(pref) {
 }
 
 // 「覚えた」チェックボタン（一覧・カード・詳細で共用）
-const CHECK_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
-const knownBtn = (id, label = '覚えた') => `<button class="known-btn" data-known="${esc(id)}" aria-pressed="${isKnown(id)}">${CHECK_SVG}${label}</button>`;
+// チェックの印は CSS で描く（一覧に500件以上並ぶので、SVG を行ごとに入れない）
+const knownBtn = (id, label = '覚えた') => `<button class="known-btn" data-known="${esc(id)}" aria-pressed="${isKnown(id)}">${label}</button>`;
 const CLOSE_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
 // どの画面でも、覚えたボタンは押すたびに切り替える
@@ -203,7 +203,40 @@ app.addEventListener('click', e => {
 // ============================================================
 // 一覧
 // ============================================================
-const listUI = { q: '', region: 'all', filter: 'all', hide: false };
+// 範囲の選び方（一覧・カード・クイズで共用）：地方を選ぶと、その地方の都道府県も選べる
+const inScope = (p, ui) => (ui.pref ? p.pref === ui.pref : inRegion(p, ui.region));
+const scopeLabel = ui => (ui.pref ? fullPref(ui.pref) : ui.region === 'all' ? '全国' : REGIONS.find(r => r.id === ui.region).label);
+
+function scopeInner(ui) {
+  const rg = REGIONS.find(r => r.id === ui.region);
+  const chips = (kind, items, cur) => `<div class="chips scroll-x" data-scope="${kind}">${items.map(([k, v]) =>
+    `<button type="button" class="chip" data-v="${k}" aria-pressed="${cur === k}">${esc(v)}</button>`).join('')}</div>`;
+  return chips('region', [['all', '全国'], ...REGIONS.map(r => [r.id, r.label])], ui.region) +
+    (rg && rg.prefs.length > 1 ? chips('pref', [['', `${rg.label}すべて`], ...rg.prefs.map(x => [x, x])], ui.pref || '') : '');
+}
+
+// el の中身を scopeInner で描き直す。onChange は選び直したあとに呼ぶ
+function bindScope(el, ui, onChange) {
+  el.innerHTML = scopeInner(ui);
+  el.addEventListener('click', e => {
+    const b = e.target.closest('[data-v]');
+    const kind = b && b.parentElement.dataset.scope;
+    if (!kind) return;
+    e.stopPropagation();
+    if (kind === 'region') { ui.region = b.dataset.v; ui.pref = null; }
+    else ui.pref = b.dataset.v || null;
+    // 横スクロールの位置を保ったまま描き直す
+    const sx = el.querySelector('[data-scope="region"]').scrollLeft;
+    const px = kind === 'pref' ? el.querySelector('[data-scope="pref"]').scrollLeft : 0;
+    el.innerHTML = scopeInner(ui);
+    el.querySelector('[data-scope="region"]').scrollLeft = sx;
+    const prefRow = el.querySelector('[data-scope="pref"]');
+    if (prefRow) prefRow.scrollLeft = px;
+    onChange();
+  });
+}
+
+const listUI = { q: '', region: 'all', pref: null, filter: 'all', hide: false, drawToken: 0 };
 
 function listRowHtml(p, weak) {
   return `<li class="prow ${isKnown(p.id) ? 'is-known' : ''}" data-row="${esc(p.id)}" tabindex="0">
@@ -220,7 +253,7 @@ function renderList() {
   app.innerHTML = `
     <section class="toolbar">
       <input type="search" id="q" placeholder="地名・読み・都道府県で検索" value="${esc(listUI.q)}">
-      <div class="chips scroll-x" id="l-region">${[['all', '全国'], ...REGIONS.map(r => [r.id, r.label])].map(([k, v]) => `<button class="chip" data-v="${k}" aria-pressed="${listUI.region === k}">${v}</button>`).join('')}</div>
+      <div class="scope" id="l-scope"></div>
       <div class="row" style="justify-content:space-between">
         <div class="chips" id="l-filter">${[['all', 'すべて'], ['todo', 'まだ'], ['known', '覚えた']].map(([k, v]) => `<button class="chip" data-v="${k}" aria-pressed="${listUI.filter === k}">${v}</button>`).join('')}</div>
         <label class="toggle"><input type="checkbox" id="l-hide" ${listUI.hide ? 'checked' : ''}> 読みを隠す</label>
@@ -234,19 +267,37 @@ function renderList() {
     const q = kana(raw);
     const weak = weakIds();
     const match = p => !raw || [p.name, fullName(p), p.pref, fullPref(p.pref), p.city || ''].some(v => v.includes(raw)) || (q && kana(p.yomi + p.sr).includes(q));
-    const rows = P.filter(p => inRegion(p, listUI.region) && match(p) &&
+    const rows = P.filter(p => inScope(p, listUI) && match(p) &&
       (listUI.filter === 'all' || (listUI.filter === 'known') === isKnown(p.id)));
-    let html = '';
+    const blocks = [];
     for (const pref of PREFS) {
       const list = rows.filter(p => p.pref === pref);
       if (!list.length) continue;
+      blocks.push({ pref, list });
+    }
+    const blockHtml = ({ pref, list }) => {
       const st = prefStats(pref);
-      html += `<section class="pref-block">
+      return `<section class="pref-block">
         <h3 class="pref-head"><a href="#map/${prefCode(pref)}">${esc(fullPref(pref))}</a><span>${st.known} / ${st.total} 覚えた</span></h3>
         <ul class="plist">${list.map(p => listRowHtml(p, weak)).join('')}</ul>
       </section>`;
-    }
-    document.getElementById('rows').innerHTML = html || '<p class="empty">該当する地名がありません</p>';
+    };
+    // 全件を一度に描くとスマホで画面の切り替えが重くなるので、最初の数県だけ先に描き、残りは少しずつ足す
+    const el = document.getElementById('rows');
+    const token = ++listUI.drawToken;
+    let i = 0;
+    const take = limit => {
+      let html = '', n = 0;
+      while (i < blocks.length && n < limit) { html += blockHtml(blocks[i]); n += blocks[i].list.length; i++; }
+      return html;
+    };
+    el.innerHTML = take(40) || '<p class="empty">該当する地名がありません</p>';
+    const more = () => {
+      if (token !== listUI.drawToken || i >= blocks.length || !el.isConnected) return;
+      el.insertAdjacentHTML('beforeend', take(80));
+      setTimeout(more, 30);
+    };
+    setTimeout(more, 60);
     document.getElementById('list-meta').textContent = `${rows.length}件の地名・タップで詳しく`;
   };
 
@@ -258,7 +309,7 @@ function renderList() {
     b.parentElement.querySelectorAll('[data-v]').forEach(x => x.setAttribute('aria-pressed', x === b));
     draw();
   });
-  chipGroup('l-region', 'region');
+  bindScope(document.getElementById('l-scope'), listUI, draw);
   chipGroup('l-filter', 'filter');
   document.getElementById('l-hide').addEventListener('change', e => { listUI.hide = e.target.checked; draw(); });
   const rowsEl = document.getElementById('rows');
@@ -361,27 +412,23 @@ function refreshPrefHead() {
 function renderPref(pref) {
   const list = byPref.get(pref);
   const weak = weakIds();
-  const todo = list.filter(p => !isKnown(p.id));
   app.innerHTML = `
     <p class="crumb"><a href="#map">← 制覇マップ</a></p>
     <div class="panel summary" id="pref-head">${prefHeadHtml(pref)}</div>
     <div class="row" style="margin:14px 0">
-      <button class="btn primary" id="pq-todo" ${todo.length ? '' : 'disabled'}>まだの地名でクイズ（${Math.min(todo.length, 10)}問）</button>
-      <button class="btn" id="pq-all">全部からクイズ</button>
-      <button class="btn ghost" id="p-cards">カードで覚える</button>
+      <button class="btn primary" id="p-quiz">この県でクイズ</button>
+      <button class="btn" id="p-cards">カードで覚える</button>
     </div>
     <ul class="plist">${list.map(p => listRowHtml(p, weak)).join('')}</ul>`;
 
-  const quiz = (pool, title) => {
-    const types = settings.types.length ? settings.types : ['yomi'];
-    const keys = shuffle(pool).slice(0, 10).map(p => `${p.id}:${pick(types)}`);
-    startSession(keys, { title });
+  // 出題パターンなどはクイズの設定画面で毎回選べるように、県を選んだ状態で設定画面を開く
+  document.getElementById('p-quiz').addEventListener('click', () => {
+    Object.assign(settings, { region: regionOf[pref], pref });
+    session = null;
     location.hash = '#quiz';
-  };
-  document.getElementById('pq-todo').addEventListener('click', () => quiz(todo, `${pref}のクイズ`));
-  document.getElementById('pq-all').addEventListener('click', () => quiz(list, `${pref}のクイズ`));
+  });
   document.getElementById('p-cards').addEventListener('click', () => {
-    Object.assign(cardUI, { region: 'all', pref, hideKnown: false, weakOnly: false });
+    Object.assign(cardUI, { region: regionOf[pref], pref, hideKnown: false, weakOnly: false });
     buildCards();
     location.hash = '#cards';
   });
@@ -398,7 +445,7 @@ const cardUI = { front: 'kanji', region: 'all', pref: null, hideKnown: true, wea
 
 function buildCards() {
   const weak = weakIds();
-  const list = P.filter(p => (cardUI.pref ? p.pref === cardUI.pref : inRegion(p, cardUI.region)) &&
+  const list = P.filter(p => inScope(p, cardUI) &&
     (!cardUI.hideKnown || !isKnown(p.id)) && (!cardUI.weakOnly || weak.has(p.id)));
   cardUI.order = shuffle(list.map(p => p.id));
   cardUI.sides = list.map(() => (cardUI.front === 'random' ? pick(['kanji', 'yomi']) : cardUI.front));
@@ -406,8 +453,62 @@ function buildCards() {
   cardUI.flipped = false;
 }
 
+// 設定部分は最初に一度だけ描き、めくる・次へではカードの部分だけ描き直す
 function renderCards() {
   if (!cardUI.order) buildCards();
+  app.innerHTML = `
+    <div class="toolbar">
+      <div class="row">
+        <span class="meta" style="margin:0">表に出すもの</span>
+        <div class="chips" id="c-front">
+          ${[['kanji', '漢字'], ['yomi', '読み'], ['random', 'ランダム']].map(([k, v]) => `<button class="chip" data-front="${k}" aria-pressed="${cardUI.front === k}">${v}</button>`).join('')}
+        </div>
+      </div>
+      <div class="scope" id="c-scope"></div>
+      <div class="row">
+        <label class="toggle"><input type="checkbox" id="c-hide" ${cardUI.hideKnown ? 'checked' : ''}> 覚えた地名は出さない</label>
+        <label class="toggle"><input type="checkbox" id="c-weak" ${cardUI.weakOnly ? 'checked' : ''}> 復習リストの地名だけ</label>
+      </div>
+    </div>
+    <div class="card-stage" id="card-stage"></div>`;
+
+  const rebuild = () => { buildCards(); drawCard(); };
+  document.getElementById('c-front').addEventListener('click', e => {
+    const b = e.target.closest('[data-front]');
+    if (!b) return;
+    cardUI.front = b.dataset.front;
+    b.parentElement.querySelectorAll('[data-front]').forEach(x => x.setAttribute('aria-pressed', x === b));
+    rebuild();
+  });
+  bindScope(document.getElementById('c-scope'), cardUI, rebuild);
+  document.getElementById('c-hide').addEventListener('change', e => { cardUI.hideKnown = e.target.checked; rebuild(); });
+  document.getElementById('c-weak').addEventListener('change', e => { cardUI.weakOnly = e.target.checked; rebuild(); });
+
+  const stage = document.getElementById('card-stage');
+  stage.addEventListener('click', e => {
+    if (e.target.closest('#card')) flipCard();
+    else if (e.target.closest('#c-prev')) cardUI.go(-1);
+    else if (e.target.closest('#c-next')) cardUI.go(1);
+    else if (e.target.closest('#c-shuffle')) rebuild();
+  });
+  cardUI.go = d => {
+    const n = cardUI.i + d;
+    if (n < 0 || n >= cardUI.order.length) return;
+    cardUI.i = n;
+    cardUI.flipped = false;
+    drawCard();
+  };
+  drawCard();
+}
+
+function flipCard() {
+  cardUI.flipped = !cardUI.flipped;
+  drawCard();
+}
+
+function drawCard() {
+  const stage = document.getElementById('card-stage');
+  if (!stage) return;
   const total = cardUI.order.length;
   const p = byId.get(cardUI.order[cardUI.i]);
   const side = cardUI.sides[cardUI.i];
@@ -427,59 +528,14 @@ function renderCards() {
       </div>`;
     }
   }
-
-  const scope = cardUI.pref ? [['pref', `${cardUI.pref}だけ`]] : [];
-  app.innerHTML = `
-    <div class="toolbar">
-      <div class="row">
-        <span class="meta" style="margin:0">表に出すもの</span>
-        <div class="chips" id="c-front">
-          ${[['kanji', '漢字'], ['yomi', '読み'], ['random', 'ランダム']].map(([k, v]) => `<button class="chip" data-front="${k}" aria-pressed="${cardUI.front === k}">${v}</button>`).join('')}
-        </div>
-      </div>
-      <div class="chips scroll-x" id="c-region">${[...scope, ['all', '全国'], ...REGIONS.map(r => [r.id, r.label])].map(([k, v]) =>
-        `<button class="chip" data-region="${k}" aria-pressed="${k === 'pref' ? !!cardUI.pref : !cardUI.pref && cardUI.region === k}">${esc(v)}</button>`).join('')}</div>
-      <div class="row">
-        <label class="toggle"><input type="checkbox" id="c-hide" ${cardUI.hideKnown ? 'checked' : ''}> 覚えた地名は出さない</label>
-        <label class="toggle"><input type="checkbox" id="c-weak" ${cardUI.weakOnly ? 'checked' : ''}> 復習リストの地名だけ</label>
-      </div>
-    </div>
-    <div class="card-stage">
-      <div class="flashcard ${cardUI.flipped ? 'back' : ''}" id="card" role="button" tabindex="0" aria-label="カードをめくる">${face}</div>
-      <div class="card-progress">${total ? cardUI.i + 1 : 0} / ${total}</div>
-      <div class="row">
-        <button class="btn" id="c-prev" ${cardUI.i <= 0 ? 'disabled' : ''}>← 前へ</button>
-        <button class="btn ghost" id="c-shuffle">シャッフル</button>
-        <button class="btn primary" id="c-next" ${cardUI.i >= total - 1 ? 'disabled' : ''}>次へ →</button>
-      </div>
+  stage.innerHTML = `
+    <div class="flashcard ${cardUI.flipped ? 'back' : ''}" id="card" role="button" tabindex="0" aria-label="カードをめくる">${face}</div>
+    <div class="card-progress">${esc(scopeLabel(cardUI))}　${total ? cardUI.i + 1 : 0} / ${total}</div>
+    <div class="row">
+      <button class="btn" id="c-prev" ${cardUI.i <= 0 ? 'disabled' : ''}>← 前へ</button>
+      <button class="btn ghost" id="c-shuffle">シャッフル</button>
+      <button class="btn primary" id="c-next" ${cardUI.i >= total - 1 ? 'disabled' : ''}>次へ →</button>
     </div>`;
-
-  const go = d => {
-    const n = cardUI.i + d;
-    if (n < 0 || n >= total) return;
-    cardUI.i = n;
-    cardUI.flipped = false;
-    renderCards();
-  };
-  document.getElementById('card').addEventListener('click', () => { cardUI.flipped = !cardUI.flipped; renderCards(); });
-  document.getElementById('c-prev').addEventListener('click', () => go(-1));
-  document.getElementById('c-next').addEventListener('click', () => go(1));
-  document.getElementById('c-shuffle').addEventListener('click', () => { buildCards(); renderCards(); });
-  document.getElementById('c-front').addEventListener('click', e => {
-    const b = e.target.closest('[data-front]');
-    if (b) { cardUI.front = b.dataset.front; buildCards(); renderCards(); }
-  });
-  document.getElementById('c-region').addEventListener('click', e => {
-    const b = e.target.closest('[data-region]');
-    if (!b || b.dataset.region === 'pref') return;
-    cardUI.region = b.dataset.region;
-    cardUI.pref = null;
-    buildCards();
-    renderCards();
-  });
-  document.getElementById('c-hide').addEventListener('change', e => { cardUI.hideKnown = e.target.checked; buildCards(); renderCards(); });
-  document.getElementById('c-weak').addEventListener('change', e => { cardUI.weakOnly = e.target.checked; buildCards(); renderCards(); });
-  cardUI.go = go;
 }
 
 // ============================================================
@@ -551,7 +607,7 @@ function makeQuestion(key) {
 // ============================================================
 // クイズ：画面
 // ============================================================
-const defaultSettings = { types: ['yomi', 'kanji'], mode: 'choice', region: 'all', level: 'all', kind: 'all', n: 10, hint: false };
+const defaultSettings = { types: ['yomi', 'kanji'], mode: 'choice', region: 'all', pref: null, level: 'all', kind: 'all', todoOnly: false, n: 10, hint: false };
 const settings = Object.assign({}, defaultSettings);
 let session = null;
 
@@ -561,9 +617,9 @@ function initialOf(yomi) {
   return m ? m[0] : '';
 }
 
-function startSession(keys, { mode = settings.mode, title = 'クイズ', review = false } = {}) {
+function startSession(keys, { mode = settings.mode, title = 'クイズ', review = false, fromSettings = false } = {}) {
   const qs = keys.map(makeQuestion).filter(Boolean).map(q => Object.assign(q, { choices: shuffle(q.choices) }));
-  session = { qs, i: 0, mode, title, review, hint: settings.hint, results: [], answered: null };
+  session = { qs, i: 0, mode, title, review, fromSettings, hint: settings.hint, results: [], answered: null };
 }
 
 // 「覚えた」地名は出題確率を 1/5 に下げる（まったく出さないと忘れるので、たまに出す）
@@ -571,7 +627,8 @@ const KNOWN_RATE = 0.2;
 const keepByKnown = p => !isKnown(p.id) || Math.random() < KNOWN_RATE;
 
 function poolFromSettings() {
-  return P.filter(p => inRegion(p, settings.region) && inLevel(p, settings.level) && inKind(p, settings.kind));
+  return P.filter(p => inScope(p, settings) && inLevel(p, settings.level) && inKind(p, settings.kind) &&
+    (!settings.todoOnly || !isKnown(p.id)));
 }
 
 function buildKeysFromSettings() {
@@ -605,12 +662,13 @@ function renderQuizSettings() {
         <fieldset>
           <legend>答え方</legend>
           ${group('mode', [['choice', '4択'], ['input', '入力']])}
-          <p class="note">入力で答えるのは「漢字 → 読み」だけです（ほかは4択で出ます）。</p>
+          <p class="note" id="mode-note"></p>
           <label class="toggle" style="margin-top:8px"><input type="checkbox" name="hint" ${settings.hint ? 'checked' : ''}> 頭文字と文字数をヒントに出す（入力のとき）</label>
         </fieldset>
         <fieldset>
-          <legend>地方</legend>
-          ${group('region', [['all', '全国'], ...REGIONS.map(r => [r.id, r.label])])}
+          <legend>範囲（地方を選ぶと都道府県も選べます）</legend>
+          <div class="scope" id="qs-scope"></div>
+          <label class="toggle" style="margin-top:10px"><input type="checkbox" name="todoOnly" ${settings.todoOnly ? 'checked' : ''}> まだ覚えていない地名だけ</label>
         </fieldset>
         <fieldset>
           <legend>難しさ</legend>
@@ -634,6 +692,15 @@ function renderQuizSettings() {
 
   const form = document.getElementById('qs-form');
   const sync = () => {
+    // 入力で答えられるのは「漢字 → 読み」だけなので、それが選ばれていないときは入力を選べなくする
+    const canInput = settings.types.includes('yomi');
+    if (!canInput) settings.mode = 'choice';
+    const inputChip = form.querySelector('[data-group="mode"] [data-v="input"]');
+    inputChip.disabled = !canInput;
+    form.querySelectorAll('[data-group="mode"] [data-v]').forEach(x => x.setAttribute('aria-pressed', x.dataset.v === settings.mode));
+    document.getElementById('mode-note').textContent = canInput
+      ? (settings.types.length > 1 ? '入力で答えるのは「漢字 → 読み」だけです（ほかは4択で出ます）。' : '')
+      : '入力で答えられるのは「漢字 → 読み」だけです。';
     const n = poolFromSettings().length;
     document.getElementById('pool-meta').textContent = `この条件の地名：${n}件`;
     document.getElementById('qs-start').disabled = settings.types.length === 0 || n === 0;
@@ -641,12 +708,14 @@ function renderQuizSettings() {
   form.addEventListener('change', e => {
     if (e.target.name === 'types') settings.types = [...form.querySelectorAll('input[name=types]:checked')].map(i => i.value);
     if (e.target.name === 'hint') settings.hint = e.target.checked;
+    if (e.target.name === 'todoOnly') settings.todoOnly = e.target.checked;
     sync();
   });
   form.addEventListener('click', e => {
     const b = e.target.closest('[data-v]');
     if (!b) return;
     const g = b.parentElement.dataset.group;
+    if (!g || b.disabled) return;
     settings[g] = g === 'n' ? +b.dataset.v : b.dataset.v;
     b.parentElement.querySelectorAll('[data-v]').forEach(x => x.setAttribute('aria-pressed', x === b));
     sync();
@@ -656,71 +725,64 @@ function renderQuizSettings() {
     if (!settings.types.length) return;
     state.settings = settings;
     save();
-    startSession(buildKeysFromSettings());
+    startSession(buildKeysFromSettings(), { title: settings.pref || settings.region !== 'all' ? `${scopeLabel(settings)}のクイズ` : 'クイズ', fromSettings: true });
     renderQuiz();
   });
+  bindScope(document.getElementById('qs-scope'), settings, sync);
   sync();
 }
 
-function renderQuestion() {
+const nextLabel = () => (session.i + 1 < session.qs.length ? '次へ →' : '結果を見る');
+
+// 問題文の部分（4択・入力で共用）。長い地名は1行に収まるよう字を小さくする
+function questionTopHtml(q) {
   const s = session;
-  const q = s.qs[s.i];
-  const ans = s.answered;
-  const pct = (s.i / s.qs.length) * 100;
-  const choiceMode = s.mode === 'choice' || q.choiceOnly;
+  const len = q.type === 'kanji' ? 0 : q.p.name.length + (q.p.suffix ? 0.62 : 0);
+  return `<div class="q-head"><span>${esc(s.title)}</span><span>${s.i + 1} / ${s.qs.length}</span></div>
+    <div class="q-progress"><i style="width:${(s.i / s.qs.length) * 100}%"></i></div>
+    <span class="q-label">${esc(q.label)}</span>
+    <p class="q-prompt">${esc(q.prompt)}</p>
+    <div class="q-show ${len ? 'fit' : ''}" ${len ? `style="--len:${len}"` : ''}>${q.show}</div>
+    <p class="q-sub">${esc(q.sub)}</p>`;
+}
 
-  const nextLabel = s.i + 1 < s.qs.length ? '次へ →' : '結果を見る';
-  let body;
-  if (choiceMode) {
-    body = `<div class="choices ${q.kanjiChoices ? 'kanji' : ''}">${q.choices.map((c, i) => {
-      let cls = '';
-      if (ans) cls = c === q.answer ? 'correct' : (c === ans.input ? 'wrong' : '');
-      return `<button class="choice ${cls}" data-c="${esc(c)}" ${ans ? 'disabled' : ''}><kbd>${i + 1}</kbd><span>${esc(c)}${q.suffixRead ? `<small>${esc(q.suffixRead)}</small>` : ''}</span></button>`;
-    }).join('')}</div>`;
-  } else {
-    body = `<form class="answer-form" id="ans-form" autocomplete="off">
-        <input type="text" id="ans" lang="ja" placeholder="ひらがなで入力" value="${ans ? esc(ans.input) : ''}" ${ans ? 'disabled' : ''}>
-        ${ans
-          ? `<button class="btn primary" type="button" id="next">${nextLabel}</button>`
-          : '<button class="btn primary" type="submit">答える</button>'}
-      </form>
-      ${ans ? '' : `<div class="row" style="justify-content:space-between; margin-top:6px">
-        <p class="input-hint">${esc(q.hint || '')}</p>
-        <button class="btn ghost small" id="giveup">わからない</button>
-      </div>`}`;
-  }
+const feedbackHtml = q => `<div class="feedback">
+    <p class="kicker">${esc(where(q.p))}</p>
+    <h3 class="fb-name">${nameHtml(q.p, true)}</h3>
+    ${factsHtml(q.p)}
+    ${relatedHtml(q.p)}
+    ${linksHtml(q.p)}
+  </div>`;
 
+function renderQuestion() {
+  const q = session.qs[session.i];
+  if (session.mode === 'choice' || q.choiceOnly) renderChoiceQuestion(q);
+  else renderInputQuestion(q);
+}
+
+function renderChoiceQuestion(q) {
+  const ans = session.answered;
   let fb = '';
   if (ans) {
-    const correctText = q.type === 'yomi' ? `正解：${fullYomi(q.p)}` : `正解：${q.answer}`;
     // 判定と「次へ」は答えたすぐ下に出し、解説はその下にまとめる（簡単な問題はスクロールせずに次へ進める）
-    const your = `${ans.ok && choiceMode ? '' : esc(correctText)}${!ans.ok && ans.input ? `（あなたの答え：${esc(ans.input)}）` : ''}`;
+    const correctText = q.type === 'yomi' ? `正解：${fullYomi(q.p)}` : `正解：${q.answer}`;
     fb = `<div class="verdict-bar ${ans.ok ? 'ok' : 'ng'}">
-        <div><p class="verdict">${ans.ok ? 'せいかい！' : 'おしい…！'}</p>${your ? `<p class="your">${your}</p>` : ''}</div>
+        <div><p class="verdict">${ans.ok ? 'せいかい！' : 'おしい…！'}</p>${ans.ok ? '' : `<p class="your">${esc(correctText)}</p>`}</div>
         <div class="verdict-actions">
           ${ans.ok ? knownBtn(q.p.id, 'もう覚えた') : ''}
-          ${choiceMode ? `<button class="btn primary" id="next">${nextLabel}</button>` : ''}
+          <button class="btn primary" id="next">${nextLabel()}</button>
         </div>
       </div>
-      <div class="feedback">
-        <p class="kicker">${esc(where(q.p))}</p>
-        <h3 class="fb-name">${nameHtml(q.p, true)}</h3>
-        ${factsHtml(q.p)}
-        ${relatedHtml(q.p)}
-        ${linksHtml(q.p)}
-      </div>`;
+      ${feedbackHtml(q)}`;
   }
-
   app.innerHTML = `
-    <div class="panel">
-      <div class="q-head"><span>${esc(s.title)}</span><span>${s.i + 1} / ${s.qs.length}</span></div>
-      <div class="q-progress"><i style="width:${pct}%"></i></div>
-      <span class="q-label">${esc(q.label)}</span>
-      <p class="q-prompt">${esc(q.prompt)}</p>
-      <div class="q-show">${q.show}</div>
-      <p class="q-sub">${esc(q.sub)}</p>
-      ${!choiceMode && s.hint && !ans ? `<p class="q-hint">ヒント：<b>${esc(initialOf(q.p.yomi))}</b> から始まる ${[...q.p.yomi].length}文字</p>` : ''}
-      ${body}
+    <div class="panel" id="q-shell" data-mode="choice">
+      ${questionTopHtml(q)}
+      <div class="choices ${q.kanjiChoices ? 'kanji' : ''}">${q.choices.map((c, i) => {
+        let cls = '';
+        if (ans) cls = c === q.answer ? 'correct' : (c === ans.input ? 'wrong' : '');
+        return `<button class="choice ${cls}" data-c="${esc(c)}" ${ans ? 'disabled' : ''}><kbd>${i + 1}</kbd><span>${esc(c)}${q.suffixRead ? `<small>${esc(q.suffixRead)}</small>` : ''}</span></button>`;
+      }).join('')}</div>
       ${fb}
     </div>
     <div class="row" style="margin-top:12px; justify-content:flex-end">
@@ -728,19 +790,77 @@ function renderQuestion() {
     </div>`;
 
   app.querySelectorAll('.choice').forEach(b => b.addEventListener('click', () => answer(b.dataset.c)));
-  const form = document.getElementById('ans-form');
-  if (form) {
-    form.addEventListener('submit', e => {
+  document.getElementById('next')?.addEventListener('click', nextQuestion);
+  document.getElementById('quit').addEventListener('click', quitQuiz);
+  if (ans) document.getElementById('next').focus({ preventScroll: true });
+}
+
+// 入力モード：入力欄は問題が変わっても作り直さない（作り直すとキーボードが閉じて開き直し、画面が上下に動くため）。
+// 判定は入力欄の上に出し、「答える」「次へ」はどちらもキーボードの決定キーで押せる
+function renderInputQuestion(q) {
+  const ans = session.answered;
+  let input = document.getElementById('ans');
+  if (!input || document.getElementById('q-shell')?.dataset.mode !== 'input') {
+    app.innerHTML = `
+      <div class="panel" id="q-shell" data-mode="input">
+        <div id="q-top"></div>
+        <div class="q-slot" id="q-slot"></div>
+        <form class="answer-form" id="ans-form" autocomplete="off">
+          <input type="text" id="ans" lang="ja" enterkeyhint="go" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="ひらがなで入力">
+          <button class="btn primary" type="submit" id="ans-btn">答える</button>
+        </form>
+        <div class="row" id="ans-sub" style="justify-content:flex-end; margin-top:6px">
+          <button type="button" class="btn ghost small" id="giveup">わからない</button>
+        </div>
+        <div id="q-fb"></div>
+      </div>
+      <div class="row" style="margin-top:12px; justify-content:flex-end">
+        <button class="btn ghost small" id="quit">やめる</button>
+      </div>`;
+    input = document.getElementById('ans');
+    document.getElementById('ans-form').addEventListener('submit', e => {
       e.preventDefault();
-      const v = document.getElementById('ans').value.trim();
+      if (session.answered) return nextQuestion();
+      const v = input.value.trim();
       if (v) answer(v);
     });
-    if (!ans) document.getElementById('ans').focus();
+    document.getElementById('giveup').addEventListener('click', () => answer(''));
+    document.getElementById('quit').addEventListener('click', quitQuiz);
+    // ボタンを押しても入力欄からフォーカスが外れない（キーボードが閉じない）ようにする
+    document.getElementById('q-shell').addEventListener('mousedown', e => {
+      if (e.target.closest('#ans-btn, #giveup, #q-slot button')) e.preventDefault();
+    });
+    input.addEventListener('focus', () => document.body.classList.add('typing'));
+    input.addEventListener('blur', () => document.body.classList.remove('typing'));
+    input.focus();
+    document.getElementById('q-shell').scrollIntoView({ block: 'start' });
   }
-  document.getElementById('giveup')?.addEventListener('click', () => answer(''));
-  document.getElementById('next')?.addEventListener('click', nextQuestion);
-  document.getElementById('quit').addEventListener('click', () => { session = null; renderQuiz(); });
-  if (ans) document.getElementById('next').focus({ preventScroll: true });
+
+  document.getElementById('q-top').innerHTML = questionTopHtml(q);
+  const slot = document.getElementById('q-slot');
+  if (!ans) {
+    slot.className = 'q-slot';
+    slot.innerHTML = session.hint
+      ? `<p class="q-hint">ヒント：<b>${esc(initialOf(q.p.yomi))}</b> から始まる ${[...q.p.yomi].length}文字</p>`
+      : `<p class="slot-note">${esc(q.hint)}</p>`;
+    input.value = '';
+  } else {
+    slot.className = `q-slot ${ans.ok ? 'ok' : 'ng'}`;
+    slot.innerHTML = ans.ok
+      ? `<div class="slot-text"><p class="verdict">せいかい！</p><p class="slot-ans">${esc(fullYomi(q.p))}</p></div>${knownBtn(q.p.id, '覚えた')}`
+      : `<div class="slot-text"><p class="verdict">おしい…</p><p class="slot-ans">正解：${esc(fullYomi(q.p))}</p></div>`;
+  }
+  input.classList.toggle('ok', !!ans && ans.ok);
+  input.classList.toggle('ng', !!ans && !ans.ok);
+  document.getElementById('ans-btn').textContent = ans ? nextLabel() : '答える';
+  document.getElementById('ans-sub').style.visibility = ans ? 'hidden' : '';
+  document.getElementById('q-fb').innerHTML = ans ? feedbackHtml(q) : '';
+}
+
+function quitQuiz() {
+  session = null;
+  document.body.classList.remove('typing');
+  renderQuiz();
 }
 
 function answer(input) {
@@ -767,10 +887,15 @@ function answer(input) {
 }
 
 function nextQuestion() {
+  const wasInput = document.getElementById('q-shell')?.dataset.mode === 'input';
   session.i++;
   session.answered = null;
   renderQuiz();
-  window.scrollTo({ top: 0 });
+  // 入力モードで次も入力の問題なら、画面を動かさない
+  if (!(wasInput && document.getElementById('q-shell')?.dataset.mode === 'input')) {
+    document.body.classList.remove('typing');
+    window.scrollTo({ top: 0 });
+  }
 }
 
 const qText = q => (q.type === 'kanji' ? `${fullYomi(q.p)}（${q.p.pref}）` : fullName(q.p));
@@ -798,8 +923,8 @@ function renderQuizResult() {
     renderQuiz();
   });
   document.getElementById('again').addEventListener('click', () => {
-    if (s.review || s.title !== 'クイズ') startSession(shuffle(s.qs.map(q => q.key)), { mode: s.mode, title: s.title, review: s.review });
-    else startSession(buildKeysFromSettings());
+    if (s.fromSettings) startSession(buildKeysFromSettings(), { title: s.title, fromSettings: true });
+    else startSession(shuffle(s.qs.map(q => q.key)), { mode: s.mode, title: s.title, review: s.review });
     renderQuiz();
   });
   document.getElementById('to-settings').addEventListener('click', () => { session = null; renderQuiz(); });
@@ -906,7 +1031,7 @@ document.addEventListener('keydown', e => {
   const view = currentView();
   const typing = e.target.matches('input, textarea, select');
   if (view === 'cards' && !typing) {
-    if (e.key === ' ') { e.preventDefault(); cardUI.flipped = !cardUI.flipped; renderCards(); }
+    if (e.key === ' ') { e.preventDefault(); flipCard(); }
     if (e.key === 'ArrowRight') cardUI.go?.(1);
     if (e.key === 'ArrowLeft') cardUI.go?.(-1);
   }
@@ -923,12 +1048,17 @@ const VIEWS = { list: renderList, map: renderMap, cards: renderCards, quiz: rend
 const hashParts = () => location.hash.slice(1).split('/');
 const currentView = () => (hashParts()[0] in VIEWS ? hashParts()[0] : 'list');
 
-function route() {
-  const v = currentView();
+function markTab(v) {
   document.querySelectorAll('.tabs a').forEach(a => {
     if (a.dataset.view === v) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   });
+}
+
+function route() {
+  const v = currentView();
+  markTab(v);
+  document.body.classList.remove('typing');
   if (v !== 'map') mapUI.pref = null;
   VIEWS[v](hashParts()[1]);
   updateBadge();
@@ -1136,9 +1266,22 @@ async function initAccount() {
 }
 
 document.getElementById('count').textContent = P.length;
+// 画面の切り替え：押したタブをすぐ光らせて「読み込み中」を出し、いったん画面に反映させてから描く
+// （描くのに時間がかかっても、押したことが分かるように）
 window.addEventListener('hashchange', () => {
   if (document.body.classList.contains('locked')) return;
-  route();
-  window.scrollTo({ top: 0 });
+  markTab(currentView());
+  document.body.classList.add('busy');
+  const hash = location.hash;
+  let done = false;
+  const go = () => {
+    if (done || hash !== location.hash) return;
+    done = true;
+    route();
+    window.scrollTo({ top: 0 });
+    document.body.classList.remove('busy');
+  };
+  requestAnimationFrame(() => setTimeout(go, 0));
+  setTimeout(go, 120); // 画面が裏にあって requestAnimationFrame が止まっているときの保険
 });
 initAccount();
